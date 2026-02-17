@@ -10,13 +10,16 @@ st.caption("Developer: Dr. Shalini Velappan")
 tab1, tab2 = st.tabs(["Simulator", "Student Guide"])
 
 # =====================================================
-# SIMULATOR
+# SIDEBAR
 # =====================================================
 with tab1:
 
-    # ---------- INPUTS ----------
-    st.sidebar.header("Property")
+    mode = st.sidebar.radio(
+        "Model type",
+        ["Simple (teaching model)", "India real-world model"]
+    )
 
+    st.sidebar.header("Property")
     price = st.sidebar.number_input("House price", value=1500000.0)
     down_pct = st.sidebar.number_input("Down payment %", value=20.0)
     loan_rate = st.sidebar.number_input("Loan interest %", value=3.0)
@@ -32,14 +35,29 @@ with tab1:
 
     st.sidebar.header("Exit")
     exit_year = st.sidebar.number_input("Sell after years", min_value=1, value=10)
-    hold_to_end = st.sidebar.checkbox("Hold till loan end (no resale)")
+    hold_to_end = st.sidebar.checkbox("Hold till loan end")
 
     st.sidebar.header("Costs")
-    buy_commission = st.sidebar.number_input("Buy commission %", value=1.0)
-    sell_commission = st.sidebar.number_input("Sell commission %", value=1.0)
-    monthly_costs = st.sidebar.number_input("Maintenance+tax+repairs", value=450.0)
+    monthly_costs = st.sidebar.number_input("Maintenance monthly", value=450.0)
 
-    # ---------- EMI ----------
+    # India-only inputs
+    if mode == "India real-world model":
+
+        st.sidebar.header("Tax")
+        tax_rate = st.sidebar.selectbox("Tax bracket", [0.1,0.2,0.3])
+        invest_return = st.sidebar.number_input("Investment return %", value=10.0)
+        cap_gain_tax = st.sidebar.number_input("Capital gains tax %", value=20.0)
+
+        st.sidebar.header("HRA")
+        salary = st.sidebar.number_input("Annual salary", value=1200000.0)
+        hra_received = st.sidebar.number_input("HRA received", value=300000.0)
+        metro = st.sidebar.checkbox("Metro city", True)
+
+        inflation = st.sidebar.number_input("Inflation %", value=5.0)
+
+    # =====================================================
+    # EMI
+    # =====================================================
     downpayment = price * down_pct/100
     loan_amt = price - downpayment
     r = loan_rate/100/12
@@ -49,13 +67,26 @@ with tab1:
     st.metric("Monthly EMI", f"{emi:,.2f}")
 
     # =====================================================
-    # CORE NPV FUNCTION
+    # HRA calc
     # =====================================================
-    def compute_npv(hg, rg, hold_mode=False, years_override=None):
+    hra_tax_save_month = 0
+    if mode == "India real-world model":
+        rent_annual = rent0*12
+        hra_exempt = min(
+            hra_received,
+            max(rent_annual - 0.1*salary,0),
+            0.5*salary if metro else 0.4*salary
+        )
+        hra_tax_save_month = hra_exempt * tax_rate / 12
+
+    # =====================================================
+    # NPV FUNCTION
+    # =====================================================
+    def compute_npv(hg, rg, hold=False, years_override=None):
 
         if years_override:
             months = int(years_override*12)
-        elif hold_mode:
+        elif hold:
             months = int(tenure*12)
         else:
             months = int(exit_year*12)
@@ -63,153 +94,171 @@ with tab1:
         monthly_disc = disc/100/12
 
         # ---------- BUY ----------
-        cf_buy = []
-        initial = downpayment + price*buy_commission/100 + 0.03*price + 8000
-        cf_buy.append(-initial)
-
         balance = loan_amt
-        equity_track = []
+        cf_buy=[-downpayment]
+        equity_track=[]
 
         for m in range(1, months+1):
+
             interest = balance*r
             principal = emi - interest
             balance -= principal
 
-            equity_track.append(price - balance)
-            cf_buy.append(-(emi + monthly_costs))
+            tax_benefit = 0
 
-        if not hold_mode and not years_override:
+            if mode == "India real-world model":
+                interest_tax = min(interest*12,200000)*tax_rate/12
+                principal_tax = min(principal*12,150000)*tax_rate/12
+                tax_benefit = interest_tax + principal_tax
+
+            cf_buy.append(-(emi + monthly_costs) + tax_benefit)
+            equity_track.append(price - balance)
+
+        if not hold and not years_override:
             sale_price = price*(1+hg/100)**exit_year
-            sale_net = sale_price*(1-sell_commission/100) - balance
+            sale_net = sale_price - balance
+
+            if mode == "India real-world model":
+                gain = sale_price - price
+                cap_tax = max(gain,0)*cap_gain_tax/100
+                sale_net -= cap_tax
+
             cf_buy[-1] += sale_net
 
         # ---------- RENT ----------
-        cf_rent = [0]
-        rent = rent0
+        cf_rent=[0]
+        rent=rent0
+        invest = downpayment
 
         for m in range(1, months+1):
             rent = rent*(1+rg/100/12)
-            cf_rent.append(-rent)
 
-        def npv(rate, cfs):
-            return sum(cf/((1+rate)**i) for i, cf in enumerate(cfs))
+            if mode == "India real-world model":
+                sip = max(emi - rent,0)
+                invest = invest*(1+invest_return/100/12) + sip
+                cf_rent.append(-rent + hra_tax_save_month)
+            else:
+                cf_rent.append(-rent)
 
-        return npv(monthly_disc, cf_buy), npv(monthly_disc, cf_rent), equity_track
+        if mode == "India real-world model":
+            cf_rent[-1]+=invest
+
+        def npv(rate,cfs):
+            return sum(cf/((1+rate)**i) for i,cf in enumerate(cfs))
+
+        return npv(monthly_disc,cf_buy), npv(monthly_disc,cf_rent), equity_track
 
     # =====================================================
     # LIVE DECISION
     # =====================================================
+    buy_now, rent_now, equity_track = compute_npv(house_growth,rent_growth,hold_to_end)
+
     st.subheader("Live decision")
 
-    buy_now, rent_now, equity_track = compute_npv(house_growth, rent_growth, hold_to_end)
-
-    if buy_now > rent_now:
+    if buy_now>rent_now:
         st.success("Buying financially better")
     else:
         st.warning("Renting financially better")
 
-    col1, col2 = st.columns(2)
-    col1.metric("NPV Buy", f"{buy_now:,.0f}")
-    col2.metric("NPV Rent", f"{rent_now:,.0f}")
+    c1,c2=st.columns(2)
+    c1.metric("NPV Buy",f"{buy_now:,.0f}")
+    c2.metric("NPV Rent",f"{rent_now:,.0f}")
 
     # =====================================================
     # COMPARISON TABLE
     # =====================================================
     st.subheader("Sell vs Hold comparison")
 
-    buy_sell, rent_sell, _ = compute_npv(house_growth, rent_growth, False)
-    buy_hold, rent_hold, _ = compute_npv(house_growth, rent_growth, True)
+    b1,r1,_=compute_npv(house_growth,rent_growth,False)
+    b2,r2,_=compute_npv(house_growth,rent_growth,True)
 
-    comp_df = pd.DataFrame({
-        "Scenario": ["Sell after chosen years", "Hold till loan end"],
-        "NPV Buy": [buy_sell, buy_hold],
-        "NPV Rent": [rent_sell, rent_hold],
-        "Buy − Rent": [buy_sell-rent_sell, buy_hold-rent_hold]
+    df=pd.DataFrame({
+        "Scenario":["Sell after chosen years","Hold till loan end"],
+        "NPV Buy":[b1,b2],
+        "NPV Rent":[r1,r2],
+        "Buy − Rent":[b1-r1,b2-r2]
     })
-
-    st.dataframe(comp_df)
+    st.dataframe(df)
 
     # =====================================================
     # BREAK EVEN
     # =====================================================
     st.subheader("Break-even holding period")
 
-    break_even = None
-    for y in range(1, tenure+1):
-        b, r, _ = compute_npv(house_growth, rent_growth, False, years_override=y)
-        if b > r:
-            break_even = y
+    be=None
+    for y in range(1,tenure+1):
+        b,r,_=compute_npv(house_growth,rent_growth,False,y)
+        if b>r:
+            be=y
             break
 
-    if break_even:
-        st.info(f"Buying becomes better after ~ {break_even} years")
+    if be:
+        st.info(f"Buying becomes better after ~ {be} years")
     else:
-        st.info("Renting better across full horizon")
+        st.info("Renting better across horizon")
 
     # =====================================================
-    # NPV VS YEARS
+    # NPV vs YEARS
     # =====================================================
-    st.subheader("NPV vs holding period")
+    st.subheader("NPV vs years")
 
-    years = list(range(1, tenure+1))
-    buy_vals, rent_vals = [], []
+    years=list(range(1,tenure+1))
+    buy_vals=[]
+    rent_vals=[]
 
     for y in years:
-        b, r, _ = compute_npv(house_growth, rent_growth, False, years_override=y)
+        b,r,_=compute_npv(house_growth,rent_growth,False,y)
         buy_vals.append(b)
         rent_vals.append(r)
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=years, y=buy_vals, name="Buy"))
-    fig.add_trace(go.Scatter(x=years, y=rent_vals, name="Rent"))
-    st.plotly_chart(fig, use_container_width=True)
+    fig=go.Figure()
+    fig.add_trace(go.Scatter(x=years,y=buy_vals,name="Buy"))
+    fig.add_trace(go.Scatter(x=years,y=rent_vals,name="Rent"))
+    st.plotly_chart(fig,use_container_width=True)
 
     # =====================================================
-    # EQUITY CHART
+    # EQUITY
     # =====================================================
-    st.subheader("Equity buildup")
+    st.subheader("Equity build")
 
-    eq_years = list(range(1, len(equity_track)//12 + 1))
-    eq_vals = [equity_track[i*12-1] for i in eq_years]
+    eq_years=list(range(1,len(equity_track)//12+1))
+    eq_vals=[equity_track[i*12-1] for i in eq_years]
 
-    fig2 = go.Figure()
-    fig2.add_trace(go.Scatter(x=eq_years, y=eq_vals, name="Equity"))
-    st.plotly_chart(fig2, use_container_width=True)
+    fig2=go.Figure()
+    fig2.add_trace(go.Scatter(x=eq_years,y=eq_vals,name="Equity"))
+    st.plotly_chart(fig2,use_container_width=True)
 
     # =====================================================
     # MONTE CARLO
     # =====================================================
-    st.subheader("Monte Carlo simulation")
+    st.subheader("Monte Carlo")
 
-    sims = st.slider("Simulations", 100, 2000, 500)
+    sims=st.slider("Simulations",100,1500,500)
 
     if st.button("Run Monte Carlo"):
 
-        outcomes = []
-
+        res=[]
         for _ in range(sims):
-            hg = np.random.normal(house_growth, 1.5)
-            rg = np.random.normal(rent_growth, 1.0)
-            b, r, _ = compute_npv(hg, rg, hold_to_end)
-            outcomes.append(b-r)
+            hg=np.random.normal(house_growth,2)
+            rg=np.random.normal(rent_growth,1.5)
+            b,r,_=compute_npv(hg,rg,hold_to_end)
+            res.append(b-r)
 
-        prob = np.mean(np.array(outcomes) > 0)
-        st.metric("Probability buying wins", f"{prob:.2%}")
+        prob=np.mean(np.array(res)>0)
+        st.metric("Probability buying wins",f"{prob:.2%}")
 
-        fig3 = go.Figure()
-        fig3.add_histogram(x=outcomes)
-        st.plotly_chart(fig3, use_container_width=True)
+        fig3=go.Figure()
+        fig3.add_histogram(x=res)
+        st.plotly_chart(fig3,use_container_width=True)
 
 # =====================================================
 # STUDENT GUIDE
 # =====================================================
 with tab2:
-    st.header("How to interpret")
-
     st.markdown("""
-If NPV(Buy) > NPV(Rent) → Buy  
-If NPV(Rent) > NPV(Buy) → Rent  
+**Simple model:**  
+Matches classroom case. No tax, no investing.
 
-Short stay → rent  
-Long stay → buy  
+**India model:**  
+Includes tax, HRA, SIP investing, capital gains.
 """)
