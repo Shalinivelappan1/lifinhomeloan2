@@ -45,7 +45,7 @@ with tab1:
     buy_commission = st.sidebar.number_input("Buy commission %", value=1.0)
     sell_commission = st.sidebar.number_input("Sell commission %", value=1.0)
 
-    # India mode
+    # India mode inputs
     if mode == "India real-world model":
         tax_rate = st.sidebar.selectbox("Tax bracket", [0.1,0.2,0.3])
         invest_return = st.sidebar.number_input("Investment return %", value=10.0)
@@ -63,17 +63,11 @@ with tab1:
     st.metric("Monthly EMI", f"{emi:,.2f}")
 
     # =====================================================
-    # NPV FUNCTION
+    # CORE NPV FUNCTION
     # =====================================================
-    def compute_npv(hg, rg, sell=True, years=None):
+    def compute_npv(hg, rg, horizon_years, include_sale):
 
-        if years:
-            months = int(years*12)
-        elif sell:
-            months = int(exit_year*12)
-        else:
-            months = int(tenure*12)
-
+        months = int(horizon_years * 12)
         monthly_disc = disc/100/12
 
         # ---------- BUY ----------
@@ -84,6 +78,7 @@ with tab1:
         cf_buy.append(-initial)
 
         for m in range(1, months+1):
+
             interest = balance*r
             principal = emi - interest
             balance -= principal
@@ -96,9 +91,9 @@ with tab1:
 
             cf_buy.append(-(emi + monthly_costs) + tax_benefit)
 
-        # sale only when actual exit year used
-        if sell and years is None:
-            sale_price = price*(1+hg/100)**exit_year
+        # resale only if requested
+        if include_sale:
+            sale_price = price*(1+hg/100)**horizon_years
             sale_net = sale_price*(1-sell_commission/100) - balance
 
             if mode == "India real-world model":
@@ -109,15 +104,15 @@ with tab1:
             cf_buy[-1] += sale_net
 
         # ---------- RENT ----------
-        cf_rent = [0]
-        rent = rent0
+        cf_rent=[0]
+        rent=rent0
         invest = downpayment
 
         for m in range(1, months+1):
             rent = rent*(1+rg/100/12)
 
             if mode == "India real-world model":
-                sip = max(emi - rent,0)
+                sip = max(emi - rent, 0)
                 invest = invest*(1+invest_return/100/12) + sip
 
             cf_rent.append(-rent)
@@ -126,33 +121,39 @@ with tab1:
             cf_rent[-1] += invest
 
         def npv(rate, cfs):
-            return sum(cf/((1+rate)**i) for i, cf in enumerate(cfs))
+            return sum(cf/((1+rate)**i) for i,cf in enumerate(cfs))
 
         return npv(monthly_disc, cf_buy), npv(monthly_disc, cf_rent)
 
     # =====================================================
-    # LIVE
+    # LIVE DECISION
     # =====================================================
-    buy_now, rent_now = compute_npv(house_growth, rent_growth, sell=not hold_to_end)
+    if hold_to_end:
+        horizon = tenure
+        include_sale = False
+    else:
+        horizon = exit_year
+        include_sale = True
+
+    buy_now, rent_now = compute_npv(house_growth, rent_growth, horizon, include_sale)
 
     st.subheader("Live decision")
-
     if buy_now > rent_now:
         st.success("Buying financially better")
     else:
         st.warning("Renting financially better")
 
-    col1, col2 = st.columns(2)
-    col1.metric("NPV Buy", f"{buy_now:,.0f}")
-    col2.metric("NPV Rent", f"{rent_now:,.0f}")
+    c1,c2 = st.columns(2)
+    c1.metric("NPV Buy", f"{buy_now:,.0f}")
+    c2.metric("NPV Rent", f"{rent_now:,.0f}")
 
     # =====================================================
     # COMPARISON TABLE
     # =====================================================
     st.subheader("Sell vs Hold comparison")
 
-    b1, r1 = compute_npv(house_growth, rent_growth, sell=True)
-    b2, r2 = compute_npv(house_growth, rent_growth, sell=False)
+    b1,r1 = compute_npv(house_growth, rent_growth, exit_year, True)
+    b2,r2 = compute_npv(house_growth, rent_growth, tenure, False)
 
     df = pd.DataFrame({
         "Scenario":["Sell after chosen years","Hold till loan end"],
@@ -169,7 +170,7 @@ with tab1:
 
     be=None
     for y in range(1, tenure+1):
-        b,r = compute_npv(house_growth, rent_growth, sell=True, years=y)
+        b,r = compute_npv(house_growth, rent_growth, y, True)
         if b>r:
             be=y
             break
@@ -184,22 +185,46 @@ with tab1:
     # =====================================================
     st.subheader("NPV vs years")
 
-    years_list=list(range(1,tenure+1))
+    years=list(range(1, tenure+1))
     buy_vals=[]
     rent_vals=[]
 
-    for y in years_list:
-        b,r = compute_npv(house_growth, rent_growth, sell=True, years=y)
+    for y in years:
+        b,r = compute_npv(house_growth, rent_growth, y, True)
         buy_vals.append(b)
         rent_vals.append(r)
 
     fig=go.Figure()
-    fig.add_trace(go.Scatter(x=years_list,y=buy_vals,name="Buy"))
-    fig.add_trace(go.Scatter(x=years_list,y=rent_vals,name="Rent"))
+    fig.add_trace(go.Scatter(x=years,y=buy_vals,name="Buy"))
+    fig.add_trace(go.Scatter(x=years,y=rent_vals,name="Rent"))
     st.plotly_chart(fig,use_container_width=True)
+
+    # =====================================================
+    # MONTE CARLO
+    # =====================================================
+    st.subheader("Monte Carlo simulation")
+
+    sims = st.slider("Simulations",100,2000,500)
+
+    if st.button("Run Monte Carlo"):
+
+        outcomes=[]
+
+        for _ in range(sims):
+            hg = np.random.normal(house_growth,1.5)
+            rg = np.random.normal(rent_growth,1.0)
+            b,r = compute_npv(hg,rg,horizon,include_sale)
+            outcomes.append(b-r)
+
+        prob = np.mean(np.array(outcomes)>0)
+        st.metric("Probability buying wins", f"{prob:.2%}")
+
+        fig2 = go.Figure()
+        fig2.add_histogram(x=outcomes)
+        st.plotly_chart(fig2,use_container_width=True)
 
 with tab2:
     st.markdown("""
-Simple mode → matches teaching case exactly  
-India mode → adds tax + investing realism
+Simple mode → matches teaching case  
+India mode → includes tax + investing  
 """)
