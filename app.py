@@ -49,11 +49,11 @@ with tab1:
     st.metric("Monthly EMI", f"{emi:,.2f}")
 
     # =====================================================
-    # NPV FUNCTION
+    # CORE NPV FUNCTION
     # =====================================================
     def compute_npv(hg, rg, hold_mode=False, years_override=None):
 
-        if years_override is not None:
+        if years_override:
             months = int(years_override*12)
         elif hold_mode:
             months = int(tenure*12)
@@ -75,12 +75,10 @@ with tab1:
             principal = emi - interest
             balance -= principal
 
-            equity = price - balance
-            equity_track.append(equity)
-
+            equity_track.append(price - balance)
             cf_buy.append(-(emi + monthly_costs))
 
-        if not hold_mode and years_override is None:
+        if not hold_mode and not years_override:
             sale_price = price*(1+hg/100)**exit_year
             sale_net = sale_price*(1-sell_commission/100) - balance
             cf_buy[-1] += sale_net
@@ -106,13 +104,30 @@ with tab1:
     buy_now, rent_now, equity_track = compute_npv(house_growth, rent_growth, hold_to_end)
 
     if buy_now > rent_now:
-        st.success("👉 Buying financially better")
+        st.success("Buying financially better")
     else:
-        st.warning("👉 Renting financially better")
+        st.warning("Renting financially better")
 
     col1, col2 = st.columns(2)
     col1.metric("NPV Buy", f"{buy_now:,.0f}")
     col2.metric("NPV Rent", f"{rent_now:,.0f}")
+
+    # =====================================================
+    # COMPARISON TABLE
+    # =====================================================
+    st.subheader("Sell vs Hold comparison")
+
+    buy_sell, rent_sell, _ = compute_npv(house_growth, rent_growth, False)
+    buy_hold, rent_hold, _ = compute_npv(house_growth, rent_growth, True)
+
+    comp_df = pd.DataFrame({
+        "Scenario": ["Sell after chosen years", "Hold till loan end"],
+        "NPV Buy": [buy_sell, buy_hold],
+        "NPV Rent": [rent_sell, rent_hold],
+        "Buy − Rent": [buy_sell-rent_sell, buy_hold-rent_hold]
+    })
+
+    st.dataframe(comp_df)
 
     # =====================================================
     # BREAK EVEN
@@ -127,18 +142,17 @@ with tab1:
             break
 
     if break_even:
-        st.info(f"Buying better after ~ {break_even} years")
+        st.info(f"Buying becomes better after ~ {break_even} years")
     else:
-        st.info("Renting better for full horizon")
+        st.info("Renting better across full horizon")
 
     # =====================================================
-    # NPV vs YEARS
+    # NPV VS YEARS
     # =====================================================
     st.subheader("NPV vs holding period")
 
     years = list(range(1, tenure+1))
-    buy_vals = []
-    rent_vals = []
+    buy_vals, rent_vals = [], []
 
     for y in years:
         b, r, _ = compute_npv(house_growth, rent_growth, False, years_override=y)
@@ -167,7 +181,7 @@ with tab1:
     # =====================================================
     st.subheader("Monte Carlo simulation")
 
-    sims = st.slider("Number of simulations", 100, 3000, 500)
+    sims = st.slider("Simulations", 100, 2000, 500)
 
     if st.button("Run Monte Carlo"):
 
@@ -177,36 +191,14 @@ with tab1:
             hg = np.random.normal(house_growth, 1.5)
             rg = np.random.normal(rent_growth, 1.0)
             b, r, _ = compute_npv(hg, rg, hold_to_end)
-            outcomes.append(b - r)
+            outcomes.append(b-r)
 
         prob = np.mean(np.array(outcomes) > 0)
         st.metric("Probability buying wins", f"{prob:.2%}")
 
-        # Histogram
         fig3 = go.Figure()
         fig3.add_histogram(x=outcomes)
         st.plotly_chart(fig3, use_container_width=True)
-
-        # Fan chart
-        st.subheader("NPV fan chart")
-
-        paths = []
-
-        for _ in range(50):
-            vals = []
-            for y in years:
-                hg = np.random.normal(house_growth, 1.5)
-                rg = np.random.normal(rent_growth, 1.0)
-                b, r, _ = compute_npv(hg, rg, False, years_override=y)
-                vals.append(b-r)
-            paths.append(vals)
-
-        fig4 = go.Figure()
-
-        for p in paths:
-            fig4.add_trace(go.Scatter(x=years, y=p, opacity=0.2, showlegend=False))
-
-        st.plotly_chart(fig4, use_container_width=True)
 
 # =====================================================
 # STUDENT GUIDE
@@ -220,6 +212,4 @@ If NPV(Rent) > NPV(Buy) → Rent
 
 Short stay → rent  
 Long stay → buy  
-
-Monte Carlo shows probability buying wins.
 """)
