@@ -166,11 +166,11 @@ with tab1:
     # BREAK-EVEN CHART
     # =====================================================
     # =====================================================
-    # BREAK-EVEN CHART (CLASSROOM READABLE)
+    # BREAK-EVEN CHART (CLASSROOM READABLE + AUTO LABEL)
     # =====================================================
     st.subheader("Break-even house growth")
     
-    growths = np.linspace(-5,8,60)
+    growths = np.linspace(-5,8,80)
     diffs=[]
     
     for gr in growths:
@@ -189,15 +189,36 @@ with tab1:
     )
     
     # zero line
-    fig.add_hline(
-        y=0,
-        line_width=4,
-        line_color="black"
-    )
+    fig.add_hline(y=0, line_width=4, line_color="black")
     
-    # big readable layout
+    # ---------- FIND BREAK-EVEN ----------
+    break_even = None
+    for i in range(len(diffs)-1):
+        if diffs[i] * diffs[i+1] < 0:
+            break_even = growths[i]
+            break
+    
+    # plot vertical line + label
+    if break_even is not None:
+        fig.add_vline(
+            x=break_even,
+            line_dash="dash",
+            line_color="red",
+            line_width=3
+        )
+    
+        fig.add_annotation(
+            x=break_even,
+            y=max(diffs)*0.8,
+            text=f"Break-even ≈ {break_even:.2f}%",
+            showarrow=True,
+            arrowhead=2,
+            font=dict(size=20, color="red")
+        )
+    
+    # layout
     fig.update_layout(
-        height=600,
+        height=620,
         template="simple_white",
         font=dict(size=20),
     
@@ -218,12 +239,10 @@ with tab1:
     
     st.plotly_chart(fig, use_container_width=True)
     
-    st.info(
-    "Where the line crosses zero is the break-even growth rate. "
-    "Right of zero → Buying creates more wealth. "
-    "Left of zero → Renting is financially better."
-    )
-    
+    if break_even is not None:
+        st.success(
+            f"Buying becomes financially better if house prices grow above ~{break_even:.2f}% per year."
+        )
     # =====================================================
     # MONTE CARLO
     # =====================================================
