@@ -42,10 +42,10 @@ with tab1:
 
     st.sidebar.header("Costs")
     monthly_costs = st.sidebar.number_input("Maintenance monthly", value=450.0)
+    buy_commission = st.sidebar.number_input("Buy commission %", value=1.0)
+    sell_commission = st.sidebar.number_input("Sell commission %", value=1.0)
 
-    # =====================================================
-    # INDIA MODE INPUTS
-    # =====================================================
+    # India mode
     if mode == "India real-world model":
         tax_rate = st.sidebar.selectbox("Tax bracket", [0.1,0.2,0.3])
         invest_return = st.sidebar.number_input("Investment return %", value=10.0)
@@ -63,43 +63,43 @@ with tab1:
     st.metric("Monthly EMI", f"{emi:,.2f}")
 
     # =====================================================
-    # CORE FUNCTION
+    # NPV FUNCTION
     # =====================================================
-    def compute_npv(hg, rg, hold=False, years_override=None):
+    def compute_npv(hg, rg, sell=True, years=None):
 
-        if years_override is not None:
-            months = int(years_override*12)
-        elif hold:
-            months = int(tenure*12)
-        else:
+        if years:
+            months = int(years*12)
+        elif sell:
             months = int(exit_year*12)
+        else:
+            months = int(tenure*12)
 
         monthly_disc = disc/100/12
 
         # ---------- BUY ----------
         balance = loan_amt
-        cf_buy = [-downpayment]
-        equity_track = []
+        cf_buy = []
+
+        initial = downpayment + price*buy_commission/100
+        cf_buy.append(-initial)
 
         for m in range(1, months+1):
             interest = balance*r
             principal = emi - interest
             balance -= principal
 
+            tax_benefit = 0
             if mode == "India real-world model":
                 interest_tax = min(interest*12,200000)*tax_rate/12
                 principal_tax = min(principal*12,150000)*tax_rate/12
                 tax_benefit = interest_tax + principal_tax
-            else:
-                tax_benefit = 0
 
             cf_buy.append(-(emi + monthly_costs) + tax_benefit)
-            equity_track.append(price - balance)
 
-        # resale
-        if not hold and years_override is None:
+        # sale only when actual exit year used
+        if sell and years is None:
             sale_price = price*(1+hg/100)**exit_year
-            sale_net = sale_price - balance
+            sale_net = sale_price*(1-sell_commission/100) - balance
 
             if mode == "India real-world model":
                 gain = sale_price - price
@@ -119,22 +119,21 @@ with tab1:
             if mode == "India real-world model":
                 sip = max(emi - rent,0)
                 invest = invest*(1+invest_return/100/12) + sip
-                cf_rent.append(-rent)
-            else:
-                cf_rent.append(-rent)
+
+            cf_rent.append(-rent)
 
         if mode == "India real-world model":
             cf_rent[-1] += invest
 
         def npv(rate, cfs):
-            return sum(cf/((1+rate)**i) for i,cf in enumerate(cfs))
+            return sum(cf/((1+rate)**i) for i, cf in enumerate(cfs))
 
-        return npv(monthly_disc, cf_buy), npv(monthly_disc, cf_rent), equity_track
+        return npv(monthly_disc, cf_buy), npv(monthly_disc, cf_rent)
 
     # =====================================================
     # LIVE
     # =====================================================
-    buy_now, rent_now, equity_track = compute_npv(house_growth, rent_growth, hold_to_end)
+    buy_now, rent_now = compute_npv(house_growth, rent_growth, sell=not hold_to_end)
 
     st.subheader("Live decision")
 
@@ -143,9 +142,25 @@ with tab1:
     else:
         st.warning("Renting financially better")
 
-    c1,c2 = st.columns(2)
-    c1.metric("NPV Buy", f"{buy_now:,.0f}")
-    c2.metric("NPV Rent", f"{rent_now:,.0f}")
+    col1, col2 = st.columns(2)
+    col1.metric("NPV Buy", f"{buy_now:,.0f}")
+    col2.metric("NPV Rent", f"{rent_now:,.0f}")
+
+    # =====================================================
+    # COMPARISON TABLE
+    # =====================================================
+    st.subheader("Sell vs Hold comparison")
+
+    b1, r1 = compute_npv(house_growth, rent_growth, sell=True)
+    b2, r2 = compute_npv(house_growth, rent_growth, sell=False)
+
+    df = pd.DataFrame({
+        "Scenario":["Sell after chosen years","Hold till loan end"],
+        "NPV Buy":[b1,b2],
+        "NPV Rent":[r1,r2],
+        "Buy − Rent":[b1-r1,b2-r2]
+    })
+    st.dataframe(df)
 
     # =====================================================
     # BREAK EVEN
@@ -154,13 +169,13 @@ with tab1:
 
     be=None
     for y in range(1, tenure+1):
-        b,r,_ = compute_npv(house_growth, rent_growth, hold=False, years_override=y)
+        b,r = compute_npv(house_growth, rent_growth, sell=True, years=y)
         if b>r:
             be=y
             break
 
     if be:
-        st.info(f"Buying better after ~ {be} years")
+        st.info(f"Buying becomes better after ~ {be} years")
     else:
         st.info("Renting better across horizon")
 
@@ -169,16 +184,22 @@ with tab1:
     # =====================================================
     st.subheader("NPV vs years")
 
-    years = list(range(1, tenure+1))
+    years_list=list(range(1,tenure+1))
     buy_vals=[]
     rent_vals=[]
 
-    for y in years:
-        b,r,_ = compute_npv(house_growth, rent_growth, hold=False, years_override=y)
+    for y in years_list:
+        b,r = compute_npv(house_growth, rent_growth, sell=True, years=y)
         buy_vals.append(b)
         rent_vals.append(r)
 
     fig=go.Figure()
-    fig.add_trace(go.Scatter(x=years,y=buy_vals,name="Buy"))
-    fig.add_trace(go.Scatter(x=years,y=rent_vals,name="Rent"))
-    st.plotly_chart(fig, use_container_width=True)
+    fig.add_trace(go.Scatter(x=years_list,y=buy_vals,name="Buy"))
+    fig.add_trace(go.Scatter(x=years_list,y=rent_vals,name="Rent"))
+    st.plotly_chart(fig,use_container_width=True)
+
+with tab2:
+    st.markdown("""
+Simple mode → matches teaching case exactly  
+India mode → adds tax + investing realism
+""")
