@@ -9,16 +9,15 @@ st.caption("Developer: Dr. Shalini Velappan")
 
 tab1, tab2 = st.tabs(["Simulator", "Student Guide"])
 
-# =====================================================
-# SIDEBAR
-# =====================================================
 with tab1:
 
+    # ================= MODEL TYPE =================
     mode = st.sidebar.radio(
         "Model type",
         ["Simple (teaching model)", "India real-world model"]
     )
 
+    # ================= INPUTS =================
     st.sidebar.header("Property")
     price = st.sidebar.number_input("House price", value=1500000.0)
     down_pct = st.sidebar.number_input("Down payment %", value=20.0)
@@ -40,7 +39,7 @@ with tab1:
     st.sidebar.header("Costs")
     monthly_costs = st.sidebar.number_input("Maintenance monthly", value=450.0)
 
-    # India-only inputs
+    # ================= INDIA MODE INPUTS =================
     if mode == "India real-world model":
 
         st.sidebar.header("Tax")
@@ -53,11 +52,7 @@ with tab1:
         hra_received = st.sidebar.number_input("HRA received", value=300000.0)
         metro = st.sidebar.checkbox("Metro city", True)
 
-        inflation = st.sidebar.number_input("Inflation %", value=5.0)
-
-    # =====================================================
-    # EMI
-    # =====================================================
+    # ================= EMI =================
     downpayment = price * down_pct/100
     loan_amt = price - downpayment
     r = loan_rate/100/12
@@ -66,9 +61,7 @@ with tab1:
 
     st.metric("Monthly EMI", f"{emi:,.2f}")
 
-    # =====================================================
-    # HRA calc
-    # =====================================================
+    # ================= HRA =================
     hra_tax_save_month = 0
     if mode == "India real-world model":
         rent_annual = rent0*12
@@ -80,11 +73,11 @@ with tab1:
         hra_tax_save_month = hra_exempt * tax_rate / 12
 
     # =====================================================
-    # NPV FUNCTION
+    # CORE FUNCTION
     # =====================================================
     def compute_npv(hg, rg, hold=False, years_override=None):
 
-        if years_override:
+        if years_override is not None:
             months = int(years_override*12)
         elif hold:
             months = int(tenure*12)
@@ -114,7 +107,8 @@ with tab1:
             cf_buy.append(-(emi + monthly_costs) + tax_benefit)
             equity_track.append(price - balance)
 
-        if not hold and not years_override:
+        # resale
+        if not hold and years_override is None:
             sale_price = price*(1+hg/100)**exit_year
             sale_net = sale_price - balance
 
@@ -128,20 +122,20 @@ with tab1:
         # ---------- RENT ----------
         cf_rent=[0]
         rent=rent0
-        invest = downpayment
+        invest = downpayment  # reset each run
 
         for m in range(1, months+1):
             rent = rent*(1+rg/100/12)
 
             if mode == "India real-world model":
-                sip = max(emi - rent,0)
+                sip = max(emi - rent, 0)
                 invest = invest*(1+invest_return/100/12) + sip
                 cf_rent.append(-rent + hra_tax_save_month)
             else:
                 cf_rent.append(-rent)
 
         if mode == "India real-world model":
-            cf_rent[-1]+=invest
+            cf_rent[-1] += invest
 
         def npv(rate,cfs):
             return sum(cf/((1+rate)**i) for i,cf in enumerate(cfs))
@@ -169,8 +163,8 @@ with tab1:
     # =====================================================
     st.subheader("Sell vs Hold comparison")
 
-    b1,r1,_=compute_npv(house_growth,rent_growth,False)
-    b2,r2,_=compute_npv(house_growth,rent_growth,True)
+    b1,r1,_=compute_npv(house_growth,rent_growth,hold=False)
+    b2,r2,_=compute_npv(house_growth,rent_growth,hold=True)
 
     df=pd.DataFrame({
         "Scenario":["Sell after chosen years","Hold till loan end"],
@@ -187,7 +181,7 @@ with tab1:
 
     be=None
     for y in range(1,tenure+1):
-        b,r,_=compute_npv(house_growth,rent_growth,False,y)
+        b,r,_=compute_npv(house_growth,rent_growth,hold=False,years_override=y)
         if b>r:
             be=y
             break
@@ -198,7 +192,7 @@ with tab1:
         st.info("Renting better across horizon")
 
     # =====================================================
-    # NPV vs YEARS
+    # NPV VS YEARS
     # =====================================================
     st.subheader("NPV vs years")
 
@@ -207,7 +201,7 @@ with tab1:
     rent_vals=[]
 
     for y in years:
-        b,r,_=compute_npv(house_growth,rent_growth,False,y)
+        b,r,_=compute_npv(house_growth,rent_growth,hold=False,years_override=y)
         buy_vals.append(b)
         rent_vals.append(r)
 
@@ -251,14 +245,11 @@ with tab1:
         fig3.add_histogram(x=res)
         st.plotly_chart(fig3,use_container_width=True)
 
-# =====================================================
-# STUDENT GUIDE
-# =====================================================
 with tab2:
     st.markdown("""
 **Simple model:**  
-Matches classroom case. No tax, no investing.
+Matches classroom case numbers exactly.
 
 **India model:**  
-Includes tax, HRA, SIP investing, capital gains.
+Includes tax benefits, HRA, SIP investing, capital gains.
 """)
