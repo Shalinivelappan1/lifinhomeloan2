@@ -11,17 +11,13 @@ tab1, tab2 = st.tabs(["Simulator", "Student Guide"])
 
 with tab1:
 
-    # =====================================================
-    # MODE
-    # =====================================================
+    # ---------------- MODE ----------------
     mode = st.sidebar.radio(
         "Model type",
         ["Simple (teaching model)", "India real-world model"]
     )
 
-    # =====================================================
-    # INPUTS
-    # =====================================================
+    # ---------------- INPUTS ----------------
     st.sidebar.header("Property")
     price = st.sidebar.number_input("House price", value=1500000.0)
     down_pct = st.sidebar.number_input("Down payment %", value=20.0)
@@ -51,9 +47,7 @@ with tab1:
         invest_return = st.sidebar.number_input("Investment return %", value=10.0)
         cap_gain_tax = st.sidebar.number_input("Capital gains tax %", value=20.0)
 
-    # =====================================================
-    # EMI
-    # =====================================================
+    # ---------------- EMI ----------------
     downpayment = price * down_pct/100
     loan_amt = price - downpayment
     r = loan_rate/100/12
@@ -63,9 +57,9 @@ with tab1:
     st.metric("Monthly EMI", f"{emi:,.2f}")
 
     # =====================================================
-    # CORE NPV FUNCTION
+    # NPV FUNCTION
     # =====================================================
-    def compute_npv(hg, rg, horizon_years, include_sale):
+    def compute_npv(horizon_years, include_sale, hg, rg):
 
         months = int(horizon_years * 12)
         monthly_disc = disc/100/12
@@ -91,7 +85,6 @@ with tab1:
 
             cf_buy.append(-(emi + monthly_costs) + tax_benefit)
 
-        # resale only if requested
         if include_sale:
             sale_price = price*(1+hg/100)**horizon_years
             sale_net = sale_price*(1-sell_commission/100) - balance
@@ -125,19 +118,18 @@ with tab1:
 
         return npv(monthly_disc, cf_buy), npv(monthly_disc, cf_rent)
 
-    # =====================================================
-    # LIVE DECISION
-    # =====================================================
+    # ---------------- LIVE ----------------
     if hold_to_end:
         horizon = tenure
-        include_sale = False
+        include_sale=False
     else:
         horizon = exit_year
-        include_sale = True
+        include_sale=True
 
-    buy_now, rent_now = compute_npv(house_growth, rent_growth, horizon, include_sale)
+    buy_now, rent_now = compute_npv(horizon, include_sale, house_growth, rent_growth)
 
     st.subheader("Live decision")
+
     if buy_now > rent_now:
         st.success("Buying financially better")
     else:
@@ -147,13 +139,11 @@ with tab1:
     c1.metric("NPV Buy", f"{buy_now:,.0f}")
     c2.metric("NPV Rent", f"{rent_now:,.0f}")
 
-    # =====================================================
-    # COMPARISON TABLE
-    # =====================================================
+    # ---------------- COMPARISON ----------------
     st.subheader("Sell vs Hold comparison")
 
-    b1,r1 = compute_npv(house_growth, rent_growth, exit_year, True)
-    b2,r2 = compute_npv(house_growth, rent_growth, tenure, False)
+    b1,r1 = compute_npv(exit_year, True, house_growth, rent_growth)
+    b2,r2 = compute_npv(tenure, False, house_growth, rent_growth)
 
     df = pd.DataFrame({
         "Scenario":["Sell after chosen years","Hold till loan end"],
@@ -163,14 +153,12 @@ with tab1:
     })
     st.dataframe(df)
 
-    # =====================================================
-    # BREAK EVEN
-    # =====================================================
+    # ---------------- BREAK EVEN ----------------
     st.subheader("Break-even holding period")
 
     be=None
     for y in range(1, tenure+1):
-        b,r = compute_npv(house_growth, rent_growth, y, True)
+        b,r = compute_npv(y, True, house_growth, rent_growth)
         if b>r:
             be=y
             break
@@ -180,9 +168,7 @@ with tab1:
     else:
         st.info("Renting better across horizon")
 
-    # =====================================================
-    # NPV vs YEARS
-    # =====================================================
+    # ---------------- NPV vs YEARS ----------------
     st.subheader("NPV vs years")
 
     years=list(range(1, tenure+1))
@@ -190,7 +176,7 @@ with tab1:
     rent_vals=[]
 
     for y in years:
-        b,r = compute_npv(house_growth, rent_growth, y, True)
+        b,r = compute_npv(y, True, house_growth, rent_growth)
         buy_vals.append(b)
         rent_vals.append(r)
 
@@ -199,9 +185,7 @@ with tab1:
     fig.add_trace(go.Scatter(x=years,y=rent_vals,name="Rent"))
     st.plotly_chart(fig,use_container_width=True)
 
-    # =====================================================
-    # MONTE CARLO
-    # =====================================================
+    # ---------------- MONTE CARLO ----------------
     st.subheader("Monte Carlo simulation")
 
     sims = st.slider("Simulations",100,2000,500)
@@ -213,7 +197,7 @@ with tab1:
         for _ in range(sims):
             hg = np.random.normal(house_growth,1.5)
             rg = np.random.normal(rent_growth,1.0)
-            b,r = compute_npv(hg,rg,horizon,include_sale)
+            b,r = compute_npv(horizon, include_sale, hg, rg)
             outcomes.append(b-r)
 
         prob = np.mean(np.array(outcomes)>0)
@@ -225,6 +209,6 @@ with tab1:
 
 with tab2:
     st.markdown("""
-Simple mode → matches teaching case  
-India mode → includes tax + investing  
+Simple mode → matches teaching case exactly  
+India mode → adds tax + investing realism  
 """)
