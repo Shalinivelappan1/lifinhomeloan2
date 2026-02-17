@@ -165,24 +165,65 @@ with tab1:
     # =====================================================
     # BREAK-EVEN CHART
     # =====================================================
+    # =====================================================
+    # BREAK-EVEN CHART (CLASSROOM READABLE)
+    # =====================================================
     st.subheader("Break-even house growth")
-
-    growths = np.linspace(-5,8,40)
+    
+    growths = np.linspace(-5,8,60)
     diffs=[]
-
+    
     for gr in growths:
         b,rn = compute_npv(gr, rent_growth)
         diffs.append(b-rn)
-
+    
     fig = go.Figure()
-    fig.add_scatter(x=growths, y=diffs)
-    fig.add_hline(y=0)
-    fig.update_layout(
-        xaxis_title="House growth %",
-        yaxis_title="NPV(Buy − Rent)"
+    
+    # main line
+    fig.add_scatter(
+        x=growths,
+        y=diffs,
+        mode="lines",
+        line=dict(width=5, color="blue"),
+        name="Buy advantage"
     )
+    
+    # zero line
+    fig.add_hline(
+        y=0,
+        line_width=4,
+        line_color="black"
+    )
+    
+    # big readable layout
+    fig.update_layout(
+        height=600,
+        template="simple_white",
+        font=dict(size=20),
+    
+        xaxis=dict(
+            title="Annual house price growth (%)",
+            title_font=dict(size=24),
+            tickfont=dict(size=20)
+        ),
+    
+        yaxis=dict(
+            title="NPV difference (Buy − Rent)",
+            title_font=dict(size=24),
+            tickfont=dict(size=20)
+        ),
+    
+        margin=dict(l=40, r=40, t=40, b=40)
+    )
+    
     st.plotly_chart(fig, use_container_width=True)
-
+    
+    st.info(
+    "Where the line crosses zero is the break-even growth rate. "
+    "Right of zero → Buying creates more wealth. "
+    "Left of zero → Renting is financially better."
+    )
+    
     # =====================================================
     # MONTE CARLO
     # =====================================================
