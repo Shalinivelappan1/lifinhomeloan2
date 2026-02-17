@@ -31,13 +31,7 @@ with tab1:
     disc = st.sidebar.number_input("Discount rate %", value=3.0)
 
     st.sidebar.header("Exit")
-
-    exit_year = st.sidebar.number_input(
-        "Sell after years",
-        min_value=1,
-        value=10
-    )
-
+    exit_year = st.sidebar.number_input("Sell after years", min_value=1, value=10)
     hold_to_end = st.sidebar.checkbox("Hold till loan end (no resale)")
 
     st.sidebar.header("Costs")
@@ -48,19 +42,20 @@ with tab1:
     # ---------- EMI ----------
     downpayment = price * down_pct/100
     loan_amt = price - downpayment
-
     r = loan_rate/100/12
     n = tenure*12
-
     emi = loan_amt*r*(1+r)**n/((1+r)**n-1)
+
     st.metric("Monthly EMI", f"{emi:,.2f}")
 
     # =====================================================
     # NPV FUNCTION
     # =====================================================
-    def compute_npv(hg, rg, hold_mode=False):
+    def compute_npv(hg, rg, hold_mode=False, years_override=None):
 
-        if hold_mode:
+        if years_override is not None:
+            months = int(years_override*12)
+        elif hold_mode:
             months = int(tenure*12)
         else:
             months = int(exit_year*12)
@@ -69,28 +64,33 @@ with tab1:
 
         # ---------- BUY ----------
         cf_buy = []
-
         initial = downpayment + price*buy_commission/100 + 0.03*price + 8000
         cf_buy.append(-initial)
 
         balance = loan_amt
 
+        equity_track = []
+
         for m in range(1, months+1):
             interest = balance*r
             principal = emi - interest
             balance -= principal
+
+            equity = price - balance
+            equity_track.append(equity)
+
             cf_buy.append(-(emi + monthly_costs))
 
         # resale only if selling
-        if not hold_mode:
+        if not hold_mode and years_override is None:
             sale_price = price*(1+hg/100)**exit_year
             sale_net = sale_price*(1-sell_commission/100) - balance
             cf_buy[-1] += sale_net
 
         # ---------- RENT ----------
         cf_rent = [0]
-
         rent = rent0
+
         for m in range(1, months+1):
             rent = rent*(1+rg/100/12)
             cf_rent.append(-rent)
@@ -98,102 +98,103 @@ with tab1:
         def npv(rate, cfs):
             return sum(cf/((1+rate)**i) for i, cf in enumerate(cfs))
 
-        return npv(monthly_disc, cf_buy), npv(monthly_disc, cf_rent)
+        return npv(monthly_disc, cf_buy), npv(monthly_disc, cf_rent), equity_track
+
+    # =====================================================
+    # LIVE DECISION INDICATOR
+    # =====================================================
+    st.subheader("Live decision")
+
+    buy_now, rent_now, equity_track = compute_npv(house_growth, rent_growth, hold_to_end)
+
+    if buy_now > rent_now:
+        st.success("👉 Buying financially better")
+    else:
+        st.warning("👉 Renting financially better")
+
+    col1, col2 = st.columns(2)
+    col1.metric("NPV Buy", f"{buy_now:,.0f}")
+    col2.metric("NPV Rent", f"{rent_now:,.0f}")
 
     # =====================================================
     # COMPARISON TABLE
     # =====================================================
-    st.subheader("Comparison: Sell vs Hold")
+    st.subheader("Sell vs Hold comparison")
 
-    buy_sell, rent_sell = compute_npv(house_growth, rent_growth, hold_mode=False)
-    buy_hold, rent_hold = compute_npv(house_growth, rent_growth, hold_mode=True)
+    buy_sell, rent_sell, _ = compute_npv(house_growth, rent_growth, hold_mode=False)
+    buy_hold, rent_hold, _ = compute_npv(house_growth, rent_growth, hold_mode=True)
 
     comp_df = pd.DataFrame({
         "Scenario": ["Sell after chosen years", "Hold till loan end"],
         "NPV Buy": [buy_sell, buy_hold],
         "NPV Rent": [rent_sell, rent_hold],
-        "Buy − Rent": [buy_sell - rent_sell, buy_hold - rent_hold]
+        "Buy − Rent": [buy_sell-rent_sell, buy_hold-rent_hold]
     })
 
     st.dataframe(comp_df)
 
     # =====================================================
-    # SCENARIO TABLE
+    # BREAK-EVEN HOLDING PERIOD
     # =====================================================
-    st.subheader("Scenario comparison (sell case)")
+    st.subheader("Break-even holding period")
 
-    scenarios = {
-        "Base": (house_growth, rent_growth),
-        "Boom": (house_growth+1, rent_growth),
-        "Crash": (house_growth-1, rent_growth)
-    }
+    break_even = None
+    for y in range(1, tenure+1):
+        b, r, _ = compute_npv(house_growth, rent_growth, False, years_override=y)
+        if b > r:
+            break_even = y
+            break
 
-    rows=[]
-    for name,(hg,rg) in scenarios.items():
-        b,rn = compute_npv(hg,rg,hold_mode=False)
-        rows.append([name,b,rn,b-rn])
-
-    df = pd.DataFrame(rows, columns=["Scenario","NPV Buy","NPV Rent","Buy-Rent"])
-    st.dataframe(df)
+    if break_even:
+        st.info(f"Buying becomes better after ~ {break_even} years")
+    else:
+        st.info("Renting better for entire horizon")
 
     # =====================================================
-    # SENSITIVITY
+    # NPV vs YEARS CHART
     # =====================================================
-    st.subheader("Growth sensitivity")
+    st.subheader("NPV vs holding period")
 
-    g = st.slider("House growth", -5.0, 5.0, float(house_growth))
-    b,rn = compute_npv(g, rent_growth, hold_mode=hold_to_end)
+    years_list = list(range(1, tenure+1))
+    buy_vals = []
+    rent_vals = []
 
-    col1,col2 = st.columns(2)
-    col1.metric("NPV Buy", f"{b:,.0f}")
-    col2.metric("NPV Rent", f"{rn:,.0f}")
+    for y in years_list:
+        b, r, _ = compute_npv(house_growth, rent_growth, False, years_override=y)
+        buy_vals.append(b)
+        rent_vals.append(r)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=years_list, y=buy_vals, name="Buy NPV"))
+    fig.add_trace(go.Scatter(x=years_list, y=rent_vals, name="Rent NPV"))
+    fig.update_layout(xaxis_title="Years", yaxis_title="NPV")
+    st.plotly_chart(fig, use_container_width=True)
 
     # =====================================================
-    # MONTE CARLO
+    # EQUITY BUILD CHART
     # =====================================================
-    st.subheader("Monte Carlo")
+    st.subheader("Equity build over time")
 
-    if st.button("Run Monte Carlo"):
-        sims=500
-        results=[]
+    equity_years = list(range(1, len(equity_track)+1))
+    equity_vals = [equity_track[int(i*12)-1] for i in range(1, len(equity_track)//12 +1)]
 
-        for _ in range(sims):
-            hg=np.random.normal(house_growth,1)
-            rg=np.random.normal(rent_growth,1)
-            b,rn = compute_npv(hg,rg,hold_mode=hold_to_end)
-            results.append(b-rn)
-
-        prob = np.mean(np.array(results)>0)
-        st.metric("Probability buy wins", f"{prob:.2%}")
-
-        fig=go.Figure()
-        fig.add_histogram(x=results)
-        st.plotly_chart(fig,use_container_width=True)
+    fig2 = go.Figure()
+    fig2.add_trace(go.Scatter(x=list(range(1, len(equity_vals)+1)), y=equity_vals, name="Equity"))
+    fig2.update_layout(xaxis_title="Years", yaxis_title="Equity")
+    st.plotly_chart(fig2, use_container_width=True)
 
 # =====================================================
 # STUDENT GUIDE
 # =====================================================
 with tab2:
-
     st.header("How to interpret")
 
     st.markdown("""
-**Decision rule**
-
 If NPV(Buy) > NPV(Rent) → Buy  
 If NPV(Rent) > NPV(Buy) → Rent  
 
-**When renting is better**
-- Short holding period  
-- Low price growth  
-- High interest rates  
+Short stay → renting often better  
+Long stay → buying often better  
 
-**When buying is better**
-- Long stay  
-- Strong price growth  
-- Rising rent  
-
-Comparing “sell vs hold” shows:
-Short stay → renting often wins  
-Lifetime stay → buying often wins  
+Break-even chart shows minimum stay needed.
 """)
